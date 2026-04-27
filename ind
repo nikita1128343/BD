@@ -46,3 +46,42 @@ CREATE TABLE Payments (
     method VARCHAR2(30),
     CONSTRAINT fk_payments_booking FOREIGN KEY (booking_id) REFERENCES Bookings(booking_id) ON DELETE CASCADE
 );
+-- Добавляем типы номеров
+INSERT INTO Room_Types (type_name, description) VALUES ('Стандарт', 'Однокомнатный номер, душ, телевизор');
+INSERT INTO Room_Types (type_name, description) VALUES ('Люкс', 'Двухкомнатный номер, джакузи, мини-бар');
+INSERT INTO Room_Types (type_name, description) VALUES ('Семейный', 'Две спальни, детская кроватка, холодильник');
+INSERT INTO Room_Types (type_name, description) VALUES ('Эконом', 'Без окон, минимальный набор');
+
+-- Добавляем номера
+INSERT INTO Rooms (room_number, price, capacity, type_id) VALUES ('101', 2500.00, 2, 1);
+INSERT INTO Rooms (room_number, price, capacity, type_id) VALUES ('102', 2500.00, 2, 1);
+INSERT INTO Rooms (room_number, price, capacity, type_id) VALUES ('201', 5500.00, 4, 2);
+INSERT INTO Rooms (room_number, price, capacity, type_id) VALUES ('202', 4200.00, 3, 3);
+INSERT INTO Rooms (room_number, price, capacity, type_id) VALUES ('301', 1500.00, 1, 4);
+
+-- Добавляем гостей
+INSERT INTO Guests (first_name, last_name, phone, email) VALUES ('Иван', 'Петров', '+7-912-123-45-67', 'ivan@example.com');
+INSERT INTO Guests (first_name, last_name, phone, email) VALUES ('Мария', 'Сидорова', '+7-913-987-65-43', 'maria@example.com');
+
+-- Добавляем бронирования
+INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, status) VALUES (1, 1, DATE '2026-05-01', DATE '2026-05-05', 'confirmed');
+INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, status) VALUES (2, 3, DATE '2026-05-10', DATE '2026-05-15', 'pending');
+
+-- Добавляем платежи
+INSERT INTO Payments (booking_id, amount, method) VALUES (1, 10000.00, 'credit_card');
+INSERT INTO Payments (booking_id, amount, method) VALUES (2, 27500.00, 'cash');
+
+
+
+
+-- Все номера с их типами
+SELECT r.room_number, rt.type_name, r.price, r.capacity
+FROM Rooms r
+JOIN Room_Types rt ON r.type_id = rt.type_id;
+
+-- Бронирования с данными
+SELECT b.booking_id, g.first_name, g.last_name, r.room_number, 
+       b.check_in_date, b.check_out_date, b.status
+FROM Bookings b
+JOIN Guests g ON b.guest_id = g.guest_id
+JOIN Rooms r ON b.room_id = r.room_id;
