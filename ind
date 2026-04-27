@@ -1,0 +1,56 @@
+-- 1. Таблица Guests (гости)
+CREATE TABLE Guests (
+    guest_id INT PRIMARY KEY AUTO_INCREMENT,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    phone VARCHAR(20),
+    email VARCHAR(100) UNIQUE
+);
+
+-- 2. Таблица Room_Types (типы номеров)
+CREATE TABLE Room_Types (
+    type_id INT PRIMARY KEY AUTO_INCREMENT,
+    type_name VARCHAR(50) NOT NULL,
+    description TEXT
+);
+
+-- 3. Таблица Rooms (номера)
+CREATE TABLE Rooms (
+    room_id INT PRIMARY KEY AUTO_INCREMENT,
+    room_number VARCHAR(10) NOT NULL UNIQUE,
+    price DECIMAL(10,2) NOT NULL,
+    capacity INT NOT NULL,
+    type_id INT,
+    FOREIGN KEY (type_id) REFERENCES Room_Types(type_id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+);
+
+-- 4. Таблица Bookings (бронирования)
+CREATE TABLE Bookings (
+    booking_id INT PRIMARY KEY AUTO_INCREMENT,
+    guest_id INT NOT NULL,
+    room_id INT NOT NULL,
+    check_in_date DATE NOT NULL,
+    check_out_date DATE NOT NULL,
+    status VARCHAR(20) DEFAULT 'confirmed',
+    FOREIGN KEY (guest_id) REFERENCES Guests(guest_id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY (room_id) REFERENCES Rooms(room_id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CHECK (check_out_date > check_in_date)
+);
+
+-- 5. Таблица Payments (платежи)
+CREATE TABLE Payments (
+    payment_id INT PRIMARY KEY AUTO_INCREMENT,
+    booking_id INT NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    method VARCHAR(30),
+    FOREIGN KEY (booking_id) REFERENCES Bookings(booking_id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
