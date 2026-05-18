@@ -1,0 +1,388 @@
+-- =============================================
+-- БАЗА ДАННЫХ ОТЕЛЯ
+-- Oracle SQL Developer версия
+-- =============================================
+
+-- 1. Удаление старых объектов (если существуют)
+BEGIN
+    EXECUTE IMMEDIATE 'DROP TRIGGER trg_bookings_dates';
+    EXECUTE IMMEDIATE 'DROP TRIGGER trg_payments_date';
+    EXECUTE IMMEDIATE 'DROP TRIGGER trg_rooms_price_check';
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_guests';
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_room_types';
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_rooms';
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_bookings';
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_payments';
+    EXECUTE IMMEDIATE 'DROP TABLE Payments CASCADE CONSTRAINTS';
+    EXECUTE IMMEDIATE 'DROP TABLE Bookings CASCADE CONSTRAINTS';
+    EXECUTE IMMEDIATE 'DROP TABLE Rooms CASCADE CONSTRAINTS';
+    EXECUTE IMMEDIATE 'DROP TABLE Room_Types CASCADE CONSTRAINTS';
+    EXECUTE IMMEDIATE 'DROP TABLE Guests CASCADE CONSTRAINTS';
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END;
+/
+
+-- =============================================
+-- СОЗДАНИЕ ТАБЛИЦ
+-- =============================================
+
+-- 1. Таблица Guests (гости)
+CREATE TABLE Guests (
+    guest_id     NUMBER PRIMARY KEY,
+    first_name   VARCHAR2(50) NOT NULL,
+    last_name    VARCHAR2(50) NOT NULL,
+    phone        VARCHAR2(20),
+    email        VARCHAR2(100) UNIQUE,
+    created_date DATE DEFAULT SYSDATE
+);
+
+-- 2. Таблица Room_Types (типы номеров)
+CREATE TABLE Room_Types (
+    type_id     NUMBER PRIMARY KEY,
+    type_name   VARCHAR2(50) NOT NULL UNIQUE,
+    description CLOB,
+    base_price  NUMBER(10,2) NOT NULL,
+    created_date DATE DEFAULT SYSDATE
+);
+
+-- 3. Таблица Rooms (номера)
+CREATE TABLE Rooms (
+    room_id      NUMBER PRIMARY KEY,
+    room_number  VARCHAR2(10) NOT NULL UNIQUE,
+    price        NUMBER(10,2) NOT NULL,
+    capacity     NUMBER NOT NULL,
+    type_id      NUMBER,
+    is_available CHAR(1) DEFAULT 'Y',
+    created_date DATE DEFAULT SYSDATE,
+    CONSTRAINT fk_rooms_type FOREIGN KEY (type_id) 
+        REFERENCES Room_Types(type_id) ON DELETE SET NULL,
+    CONSTRAINT chk_rooms_capacity CHECK (capacity > 0),
+    CONSTRAINT chk_rooms_price CHECK (price >= 0),
+    CONSTRAINT chk_rooms_available CHECK (is_available IN ('Y', 'N'))
+);
+
+-- 4. Таблица Bookings (бронирования)
+CREATE TABLE Bookings (
+    booking_id     NUMBER PRIMARY KEY,
+    guest_id       NUMBER NOT NULL,
+    room_id        NUMBER NOT NULL,
+    check_in_date  DATE NOT NULL,
+    check_out_date DATE NOT NULL,
+    status         VARCHAR2(20) DEFAULT 'CONFIRMED',
+    total_price    NUMBER(10,2),
+    created_date   DATE DEFAULT SYSDATE,
+    CONSTRAINT fk_bookings_guest FOREIGN KEY (guest_id) 
+        REFERENCES Guests(guest_id) ON DELETE CASCADE,
+    CONSTRAINT fk_bookings_room FOREIGN KEY (room_id) 
+        REFERENCES Rooms(room_id) ON DELETE CASCADE,
+    CONSTRAINT chk_bookings_dates CHECK (check_out_date > check_in_date),
+    CONSTRAINT chk_bookings_status CHECK (status IN ('CONFIRMED', 'CANCELLED', 'COMPLETED', 'PENDING'))
+);
+
+-- 5. Таблица Payments (платежи)
+CREATE TABLE Payments (
+    payment_id   NUMBER PRIMARY KEY,
+    booking_id   NUMBER NOT NULL,
+    amount       NUMBER(10,2) NOT NULL,
+    payment_date DATE DEFAULT SYSDATE,
+    method       VARCHAR2(30),
+    status       VARCHAR2(20) DEFAULT 'COMPLETED',
+    CONSTRAINT fk_payments_booking FOREIGN KEY (booking_id) 
+        REFERENCES Bookings(booking_id) ON DELETE CASCADE,
+    CONSTRAINT chk_payments_amount CHECK (amount > 0),
+    CONSTRAINT chk_payments_method CHECK (method IN ('CASH', 'CREDIT_CARD', 'DEBIT_CARD', 'ONLINE', 'BANK_TRANSFER')),
+    CONSTRAINT chk_payments_status CHECK (status IN ('COMPLETED', 'PENDING', 'FAILED', 'REFUNDED'))
+);
+
+-- =============================================
+-- СОЗДАНИЕ ПОСЛЕДОВАТЕЛЬНОСТЕЙ (SEQUENCES)
+-- =============================================
+
+CREATE SEQUENCE seq_guests START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_room_types START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_rooms START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_bookings START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_payments START WITH 1 INCREMENT BY 1;
+
+-- =============================================
+-- ТРИГГЕРЫ ДЛЯ АВТО-ИНКРЕМЕНТА (BEFORE INSERT)
+-- =============================================
+
+-- Триггер для Guests
+CREATE OR REPLACE TRIGGER trg_guests_id
+BEFORE INSERT ON Guests
+FOR EACH ROW
+BEGIN
+    IF :NEW.guest_id IS NULL THEN
+        SELECT seq_guests.NEXTVAL INTO :NEW.guest_id FROM DUAL;
+    END IF;
+END;
+/
+
+-- Триггер для Room_Types
+CREATE OR REPLACE TRIGGER trg_room_types_id
+BEFORE INSERT ON Room_Types
+FOR EACH ROW
+BEGIN
+    IF :NEW.type_id IS NULL THEN
+        SELECT seq_room_types.NEXTVAL INTO :NEW.type_id FROM DUAL;
+    END IF;
+END;
+/
+
+-- Триггер для Rooms
+CREATE OR REPLACE TRIGGER trg_rooms_id
+BEFORE INSERT ON Rooms
+FOR EACH ROW
+BEGIN
+    IF :NEW.room_id IS NULL THEN
+        SELECT seq_rooms.NEXTVAL INTO :NEW.room_id FROM DUAL;
+    END IF;
+END;
+/
+
+-- Триггер для Bookings
+CREATE OR REPLACE TRIGGER trg_bookings_id
+BEFORE INSERT ON Bookings
+FOR EACH ROW
+BEGIN
+    IF :NEW.booking_id IS NULL THEN
+        SELECT seq_bookings.NEXTVAL INTO :NEW.booking_id FROM DUAL;
+    END IF;
+END;
+/
+
+-- Триггер для Payments
+CREATE OR REPLACE TRIGGER trg_payments_id
+BEFORE INSERT ON Payments
+FOR EACH ROW
+BEGIN
+    IF :NEW.payment_id IS NULL THEN
+        SELECT seq_payments.NEXTVAL INTO :NEW.payment_id FROM DUAL;
+    END IF;
+END;
+/
+
+-- =============================================
+-- БИЗНЕС-ТРИГГЕРЫ
+-- =============================================
+
+-- Триггер 1: Автоматический расчёт total_price при бронировании
+CREATE OR REPLACE TRIGGER trg_bookings_calc_price
+BEFORE INSERT OR UPDATE OF check_in_date, check_out_date, room_id ON Bookings
+FOR EACH ROW
+DECLARE
+    v_room_price NUMBER;
+    v_nights NUMBER;
+BEGIN
+    -- Получаем цену номера
+    SELECT price INTO v_room_price FROM Rooms WHERE room_id = :NEW.room_id;
+    
+    -- Рассчитываем количество ночей
+    v_nights := :NEW.check_out_date - :NEW.check_in_date;
+    
+    -- Устанавливаем общую цену
+    :NEW.total_price := v_room_price * v_nights;
+END;
+/
+
+-- Триггер 2: Проверка, что номер свободен на выбранные даты
+CREATE OR REPLACE TRIGGER trg_bookings_check_availability
+BEFORE INSERT OR UPDATE OF check_in_date, check_out_date, room_id ON Bookings
+FOR EACH ROW
+DECLARE
+    v_conflict_count NUMBER;
+BEGIN
+    IF :NEW.status != 'CANCELLED' THEN
+        SELECT COUNT(*)
+        INTO v_conflict_count
+        FROM Bookings
+        WHERE room_id = :NEW.room_id
+          AND status != 'CANCELLED'
+          AND booking_id != NVL(:OLD.booking_id, -1)
+          AND NOT (:NEW.check_out_date <= check_in_date OR 
+                   :NEW.check_in_date >= check_out_date);
+        
+        IF v_conflict_count > 0 THEN
+            RAISE_APPLICATION_ERROR(-20001, 'Номер уже забронирован на выбранные даты!');
+        END IF;
+    END IF;
+END;
+/
+
+-- Триггер 3: При успешном бронировании меняем статус комнаты
+CREATE OR REPLACE TRIGGER trg_bookings_update_room_status
+AFTER INSERT OR UPDATE OF status ON Bookings
+FOR EACH ROW
+BEGIN
+    IF :NEW.status = 'CONFIRMED' THEN
+        UPDATE Rooms SET is_available = 'N' 
+        WHERE room_id = :NEW.room_id;
+    ELSIF :NEW.status IN ('CANCELLED', 'COMPLETED') THEN
+        UPDATE Rooms SET is_available = 'Y' 
+        WHERE room_id = :NEW.room_id;
+    END IF;
+END;
+/
+
+-- Триггер 4: Проверка дат (заезд не может быть раньше сегодня)
+CREATE OR REPLACE TRIGGER trg_bookings_dates
+BEFORE INSERT OR UPDATE OF check_in_date ON Bookings
+FOR EACH ROW
+BEGIN
+    IF :NEW.check_in_date < TRUNC(SYSDATE) THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Дата заезда не может быть в прошлом!');
+    END IF;
+END;
+/
+
+-- Триггер 5: Автоматическая отметка времени платежа
+CREATE OR REPLACE TRIGGER trg_payments_date
+BEFORE INSERT ON Payments
+FOR EACH ROW
+BEGIN
+    IF :NEW.payment_date IS NULL THEN
+        :NEW.payment_date := SYSDATE;
+    END IF;
+END;
+/
+
+-- Триггер 6: Проверка суммы платежа (не больше общей суммы бронирования)
+CREATE OR REPLACE TRIGGER trg_payments_check_amount
+BEFORE INSERT OR UPDATE OF amount ON Payments
+FOR EACH ROW
+DECLARE
+    v_total_price NUMBER;
+BEGIN
+    SELECT total_price INTO v_total_price 
+    FROM Bookings WHERE booking_id = :NEW.booking_id;
+    
+    IF :NEW.amount > v_total_price THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Сумма платежа не может превышать общую стоимость бронирования!');
+    END IF;
+END;
+/
+
+-- =============================================
+-- ИНДЕКСЫ ДЛЯ ОПТИМИЗАЦИИ ЗАПРОСОВ
+-- =============================================
+
+CREATE INDEX idx_bookings_dates ON Bookings(check_in_date, check_out_date);
+CREATE INDEX idx_bookings_guest ON Bookings(guest_id);
+CREATE INDEX idx_bookings_room ON Bookings(room_id);
+CREATE INDEX idx_payments_booking ON Payments(booking_id);
+CREATE INDEX idx_rooms_type ON Rooms(type_id);
+CREATE INDEX idx_guests_email ON Guests(email);
+
+-- =============================================
+-- ПРОЦЕДУРА: Отмена бронирования
+-- =============================================
+
+CREATE OR REPLACE PROCEDURE cancel_booking(p_booking_id NUMBER) IS
+BEGIN
+    UPDATE Bookings 
+    SET status = 'CANCELLED' 
+    WHERE booking_id = p_booking_id;
+    
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Бронирование ' || p_booking_id || ' отменено');
+END;
+/
+
+-- =============================================
+-- ФУНКЦИЯ: Получить загрузку отеля по датам
+-- =============================================
+
+CREATE OR REPLACE FUNCTION get_occupancy_rate(p_start_date DATE, p_end_date DATE)
+RETURN NUMBER IS
+    v_total_rooms NUMBER;
+    v_booked_rooms NUMBER;
+    v_rate NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_total_rooms FROM Rooms;
+    
+    SELECT COUNT(DISTINCT room_id) INTO v_booked_rooms
+    FROM Bookings
+    WHERE status = 'CONFIRMED'
+      AND NOT (p_end_date <= check_in_date OR p_start_date >= check_out_date);
+    
+    IF v_total_rooms > 0 THEN
+        v_rate := (v_booked_rooms / v_total_rooms) * 100;
+    ELSE
+        v_rate := 0;
+    END IF;
+    
+    RETURN ROUND(v_rate, 2);
+END;
+/
+
+-- =============================================
+-- ВСТАВКА ТЕСТОВЫХ ДАННЫХ
+-- =============================================
+
+-- Добавляем типы номеров
+INSERT INTO Room_Types (type_name, description, base_price) VALUES ('Стандарт', 'Однокомнатный номер, душ, телевизор', 2500.00);
+INSERT INTO Room_Types (type_name, description, base_price) VALUES ('Люкс', 'Двухкомнатный номер, джакузи, мини-бар', 5500.00);
+INSERT INTO Room_Types (type_name, description, base_price) VALUES ('Семейный', 'Две спальни, детская кроватка', 4200.00);
+INSERT INTO Room_Types (type_name, description, base_price) VALUES ('Эконом', 'Без окон, минимальный набор', 1500.00);
+
+COMMIT;
+
+-- Добавляем номера
+INSERT INTO Rooms (room_number, price, capacity, type_id, is_available) VALUES ('101', 2500.00, 2, 1, 'Y');
+INSERT INTO Rooms (room_number, price, capacity, type_id, is_available) VALUES ('102', 2500.00, 2, 1, 'Y');
+INSERT INTO Rooms (room_number, price, capacity, type_id, is_available) VALUES ('201', 5500.00, 4, 2, 'Y');
+INSERT INTO Rooms (room_number, price, capacity, type_id, is_available) VALUES ('202', 4200.00, 3, 3, 'Y');
+INSERT INTO Rooms (room_number, price, capacity, type_id, is_available) VALUES ('301', 1500.00, 1, 4, 'Y');
+
+COMMIT;
+
+-- Добавляем гостей
+INSERT INTO Guests (first_name, last_name, phone, email) VALUES ('Иван', 'Петров', '+7-912-123-45-67', 'ivan@example.com');
+INSERT INTO Guests (first_name, last_name, phone, email) VALUES ('Мария', 'Сидорова', '+7-913-987-65-43', 'maria@example.com');
+INSERT INTO Guests (first_name, last_name, phone, email) VALUES ('Алексей', 'Иванов', '+7-914-555-12-34', 'alex@example.com');
+
+COMMIT;
+
+-- Добавляем бронирования (дата заезда: 10 июня 2026)
+INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, status) 
+VALUES (1, 1, DATE '2026-06-10', DATE '2026-06-15', 'CONFIRMED');
+
+INSERT INTO Bookings (guest_id, room_id, check_in_date, check_out_date, status) 
+VALUES (2, 3, DATE '2026-06-20', DATE '2026-06-25', 'PENDING');
+
+COMMIT;
+
+-- Добавляем платежи
+INSERT INTO Payments (booking_id, amount, method, status) 
+VALUES (1, 12500.00, 'CREDIT_CARD', 'COMPLETED');
+
+COMMIT;
+
+-- =============================================
+-- ПРОСМОТР ДАННЫХ
+-- =============================================
+
+-- Вывод всех таблиц
+SELECT '=== GUESTS ===' AS info FROM DUAL;
+SELECT * FROM Guests;
+
+SELECT '=== ROOM TYPES ===' AS info FROM DUAL;
+SELECT * FROM Room_Types;
+
+SELECT '=== ROOMS ===' AS info FROM DUAL;
+SELECT r.room_id, r.room_number, rt.type_name, r.price, r.capacity, r.is_available
+FROM Rooms r LEFT JOIN Room_Types rt ON r.type_id = rt.type_id;
+
+SELECT '=== BOOKINGS ===' AS info FROM DUAL;
+SELECT b.booking_id, g.last_name, r.room_number, b.check_in_date, b.check_out_date, b.total_price, b.status
+FROM Bookings b
+JOIN Guests g ON b.guest_id = g.guest_id
+JOIN Rooms r ON b.room_id = r.room_id;
+
+SELECT '=== PAYMENTS ===' AS info FROM DUAL;
+SELECT * FROM Payments;
+
+-- Проверка загрузки отеля
+SELECT 'Отель загружен на ' || get_occupancy_rate(DATE '2026-06-10', DATE '2026-06-25') || '%' AS occupancy FROM DUAL;
